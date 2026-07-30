@@ -16,7 +16,9 @@ import type {
   BridgeMember,
   FailureReason,
   LevelDefinition,
+  MaterialDefinition,
   MemberStress,
+  StressMode,
   TestResult,
   Vec2Data,
 } from "./types";
@@ -31,6 +33,10 @@ interface RuntimeMember {
   startBody: Body;
   endBody: Body;
   body?: Body;
+  deckJoints?: {
+    start: Joint;
+    end: Joint;
+  };
   joints: Joint[];
   stress: MemberStress;
 }
@@ -57,8 +63,87 @@ export interface SimulationSnapshot {
   result?: TestResult;
 }
 
-function magnitude(vector: Vec2Data): number {
-  return Math.hypot(vector.x, vector.y);
+export interface DeckStressEvaluation {
+  utilization: number;
+  mode: StressMode;
+  componentUtilization: MemberStress["componentUtilization"];
+  loads: {
+    axialForce: number;
+    shearForce: number;
+    bendingMoment: number;
+  };
+}
+
+function dot(left: Vec2Data, right: Vec2Data): number {
+  return left.x * right.x + left.y * right.y;
+}
+
+function normalizeLoad(load: number, strength: number): number {
+  if (load === 0) {
+    return 0;
+  }
+  return strength > 0 ? load / strength : Number.POSITIVE_INFINITY;
+}
+
+/**
+ * Resolves the two endpoint reactions into the deck's current local axes.
+ *
+ * Planck reports the force on body B. Both revolute joints are created with
+ * the deck as body B, so tension pulls the start end backward and the finish
+ * end forward. The difference between those local axial reactions therefore
+ * preserves the tension/compression sign.
+ */
+export function evaluateDeckStress(
+  startReaction: Vec2Data,
+  endReaction: Vec2Data,
+  start: Vec2Data,
+  end: Vec2Data,
+  material: MaterialDefinition,
+): DeckStressEvaluation {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const length = Math.hypot(dx, dy);
+  if (length <= Number.EPSILON) {
+    return {
+      utilization: 0,
+      mode: "bending",
+      componentUtilization: { axial: 0, shear: 0, bending: 0 },
+      loads: { axialForce: 0, shearForce: 0, bendingMoment: 0 },
+    };
+  }
+
+  const axis = { x: dx / length, y: dy / length };
+  const normal = { x: -axis.y, y: axis.x };
+  const axialForce = (dot(endReaction, axis) - dot(startReaction, axis)) / 2;
+  const shearForce = Math.max(
+    Math.abs(dot(startReaction, normal)),
+    Math.abs(dot(endReaction, normal)),
+  );
+  const bendingMoment = (shearForce * length) / 4;
+  const axialStrength = axialForce >= 0 ? material.tensileStrength : material.compressiveStrength;
+  const componentUtilization = {
+    axial: normalizeLoad(Math.abs(axialForce), axialStrength),
+    shear: normalizeLoad(shearForce, material.shearStrength),
+    bending: normalizeLoad(bendingMoment, material.bendingStrength),
+  };
+
+  let mode: StressMode = "bending";
+  let utilization = componentUtilization.bending;
+  if (componentUtilization.axial > utilization) {
+    mode = axialForce >= 0 ? "tension" : "compression";
+    utilization = componentUtilization.axial;
+  }
+  if (componentUtilization.shear > utilization) {
+    mode = "shear";
+    utilization = componentUtilization.shear;
+  }
+
+  return {
+    utilization,
+    mode,
+    componentUtilization,
+    loads: { axialForce, shearForce, bendingMoment },
+  };
 }
 
 function memberEnds(runtime: RuntimeMember): [Vec2Data, Vec2Data] {
@@ -93,6 +178,7 @@ export function updateStressState(
   utilization: number,
   mode: MemberStress["mode"],
   dt: number,
+  componentUtilization: MemberStress["componentUtilization"] = state.componentUtilization,
 ): MemberStress {
   const alpha = 1 - Math.exp(-dt / 0.15);
   const smoothedUtilization =
@@ -104,6 +190,7 @@ export function updateStressState(
     smoothedUtilization,
     overloadTime,
     mode,
+    componentUtilization,
     broken: state.broken || utilization >= 1.5 || overloadTime >= 0.12,
   };
 }
@@ -193,6 +280,7 @@ export class BridgeSimulation {
 
       const joints: Joint[] = [];
       let body: Body | undefined;
+      let deckJoints: RuntimeMember["deckJoints"];
       if (member.kind === "steel") {
         const joint = this.world.createJoint(
           new DistanceJoint(
@@ -245,6 +333,9 @@ export class BridgeSimulation {
         if (jointB) {
           joints.push(jointB);
         }
+        if (jointA && jointB) {
+          deckJoints = { start: jointA, end: jointB };
+        }
       }
 
       this.runtimeMembers.set(member.id, {
@@ -252,12 +343,14 @@ export class BridgeSimulation {
         startBody,
         endBody,
         body,
+        deckJoints,
         joints,
         stress: {
           memberId: member.id,
           utilization: 0,
           smoothedUtilization: 0,
           mode: member.kind === "steel" ? "tension" : "bending",
+          componentUtilization: { axial: 0, shear: 0, bending: 0 },
           overloadTime: 0,
           broken: false,
         },
@@ -329,6 +422,11 @@ export class BridgeSimulation {
     const material = this.level.materials[runtime.definition.kind];
     let utilization = 0;
     let mode: MemberStress["mode"] = "bending";
+    let componentUtilization: MemberStress["componentUtilization"] = {
+      axial: 0,
+      shear: 0,
+      bending: 0,
+    };
 
     if (runtime.definition.kind === "steel") {
       const joint = runtime.joints[0];
@@ -342,18 +440,22 @@ export class BridgeSimulation {
       const signedForce = force.x * direction.x + force.y * direction.y;
       mode = signedForce < 0 ? "tension" : "compression";
       const strength = mode === "tension" ? material.tensileStrength : material.compressiveStrength;
-      utilization = magnitude(force) / strength;
+      utilization = normalizeLoad(Math.abs(signedForce), strength);
+      componentUtilization = { axial: utilization, shear: 0, bending: 0 };
     } else {
-      const forces = runtime.joints.map((joint) => magnitude(joint.getReactionForce(1 / dt)));
-      const peakForce = Math.max(0, ...forces);
-      const approximateMoment = (peakForce * runtime.definition.length) / 4;
-      utilization = Math.max(
-        peakForce / material.compressiveStrength,
-        approximateMoment / material.bendingStrength,
-      );
+      if (!runtime.deckJoints) {
+        return;
+      }
+      const [start, end] = memberEnds(runtime);
+      const startReaction = runtime.deckJoints.start.getReactionForce(1 / dt);
+      const endReaction = runtime.deckJoints.end.getReactionForce(1 / dt);
+      const evaluation = evaluateDeckStress(startReaction, endReaction, start, end, material);
+      utilization = evaluation.utilization;
+      mode = evaluation.mode;
+      componentUtilization = evaluation.componentUtilization;
     }
 
-    runtime.stress = updateStressState(runtime.stress, utilization, mode, dt);
+    runtime.stress = updateStressState(runtime.stress, utilization, mode, dt, componentUtilization);
     if (runtime.stress.broken) {
       for (const joint of runtime.joints) {
         this.world.destroyJoint(joint);
@@ -445,7 +547,10 @@ export class BridgeSimulation {
           kind: runtime.definition.kind,
           start,
           end,
-          stress: { ...runtime.stress },
+          stress: {
+            ...runtime.stress,
+            componentUtilization: { ...runtime.stress.componentUtilization },
+          },
         };
       }),
       nodes: this.design.nodes.map((node) => {

@@ -32,8 +32,12 @@ export const LEVEL: LevelDefinition = {
       costPerMeter: 500,
       density: 2,
       maxLength: 2,
-      tensileStrength: 920,
+      // Pin-connected deck chains otherwise carry an unsupported span as a
+      // high-tension catenary. This limit makes that failure mode explicit.
+      tensileStrength: 450,
       compressiveStrength: 820,
+      // Produces about 80% peak shear utilization in the reference truss.
+      shearStrength: 112,
       bendingStrength: 390,
       color: 0xf2b84b,
     },
@@ -45,6 +49,8 @@ export const LEVEL: LevelDefinition = {
       maxLength: 2.5,
       tensileStrength: 165,
       compressiveStrength: 135,
+      // Steel members are modeled as axial-only distance joints.
+      shearStrength: 135,
       bendingStrength: 0,
       color: 0x69c6d9,
     },

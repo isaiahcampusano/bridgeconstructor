@@ -1,6 +1,7 @@
 export type MemberKind = "deck" | "steel";
 export type GamePhase = "BUILD" | "TESTING" | "SUCCESS" | "FAILURE";
 export type FailureReason = "fell" | "stalled" | "timeout" | "stopped";
+export type StressMode = "tension" | "compression" | "shear" | "bending";
 
 export interface Vec2Data {
   x: number;
@@ -21,6 +22,7 @@ export interface MaterialDefinition {
   maxLength: number;
   tensileStrength: number;
   compressiveStrength: number;
+  shearStrength: number;
   bendingStrength: number;
   color: number;
 }
@@ -114,7 +116,12 @@ export interface MemberStress {
   memberId: string;
   utilization: number;
   smoothedUtilization: number;
-  mode: "tension" | "compression" | "bending";
+  mode: StressMode;
+  componentUtilization: {
+    axial: number;
+    shear: number;
+    bending: number;
+  };
   overloadTime: number;
   broken: boolean;
 }
