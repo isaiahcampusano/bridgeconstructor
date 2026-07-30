@@ -1,0 +1,35 @@
+{
+  "name": "bridge-constructor",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "check": "biome check src e2e .github package.json biome.json tsconfig.json vite.config.ts playwright.config.ts index.html",
+    "check:fix": "biome check --write src e2e .github package.json biome.json tsconfig.json vite.config.ts playwright.config.ts index.html",
+    "format:check": "biome format src e2e .github package.json biome.json tsconfig.json vite.config.ts playwright.config.ts index.html",
+    "lint": "biome lint src e2e .github package.json biome.json tsconfig.json vite.config.ts playwright.config.ts index.html",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "ci": "npm run check && npm run typecheck && npm test && npm run build"
+  },
+  "dependencies": {
+    "pixi.js": "8.19.0",
+    "planck": "1.5.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.6",
+    "@playwright/test": "1.62.0",
+    "@types/node": "24.5.2",
+    "typescript": "5.9.2",
+    "vite": "8.1.5",
+    "vitest": "4.1.10"
+  }
+}
