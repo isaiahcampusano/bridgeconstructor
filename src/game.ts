@@ -1,6 +1,5 @@
 import { Application, Container, Graphics } from "pixi.js";
 import { BridgeAudio } from "./audio";
-import { LEVEL } from "./level";
 import {
   addMember,
   cloneDesign,
@@ -19,7 +18,15 @@ import {
 } from "./simulator";
 import { transitionPhase } from "./state";
 import { saveState } from "./storage";
-import type { BridgeDesign, BridgeMember, GamePhase, MemberKind, Vec2Data } from "./types";
+import {
+  type BridgeDesign,
+  type BridgeMember,
+  type GamePhase,
+  type LevelDefinition,
+  MEMBER_KINDS,
+  type MemberKind,
+  type Vec2Data,
+} from "./types";
 
 type Tool = MemberKind | "erase";
 
@@ -118,7 +125,12 @@ export class BridgeGame {
   private messageTimer?: number;
   private brokenFlashes: Array<{ start: Vec2Data; end: Vec2Data; age: number }> = [];
 
-  constructor(design: BridgeDesign, muted: boolean) {
+  constructor(
+    private readonly level: LevelDefinition,
+    design: BridgeDesign,
+    muted: boolean,
+    private readonly onSuccess: (cost: number) => void = () => undefined,
+  ) {
     this.design = cloneDesign(design);
     this.muted = muted;
     this.audio = new BridgeAudio(muted);
@@ -229,10 +241,10 @@ export class BridgeGame {
     if (this.phase !== "BUILD") {
       return;
     }
-    if (event.key === "1") {
-      this.selectTool("deck");
-    } else if (event.key === "2") {
-      this.selectTool("steel");
+    const materialIndex = Number(event.key) - 1;
+    const material = MEMBER_KINDS[materialIndex];
+    if (material) {
+      this.selectTool(material);
     } else if (event.key.toLowerCase() === "e") {
       this.selectTool("erase");
     }
@@ -243,7 +255,7 @@ export class BridgeGame {
       return;
     }
     this.pixi.canvas.setPointerCapture(event.pointerId);
-    const worldPoint = snapPoint(this.pointerWorld(event), LEVEL.gridSpacing);
+    const worldPoint = snapPoint(this.pointerWorld(event), this.level.gridSpacing);
     if (this.tool === "erase") {
       const member = this.hitMember(event);
       if (member) {
@@ -259,13 +271,13 @@ export class BridgeGame {
   };
 
   private pointerMove = (event: PointerEvent): void => {
-    const worldPoint = snapPoint(this.pointerWorld(event), LEVEL.gridSpacing);
+    const worldPoint = snapPoint(this.pointerWorld(event), this.level.gridSpacing);
     this.hoverPoint = worldPoint;
     if (this.drag) {
       this.drag.end = worldPoint;
       const preview = previewMember(
         this.design,
-        LEVEL,
+        this.level,
         this.tool as MemberKind,
         this.drag.start,
         this.drag.end,
@@ -286,7 +298,7 @@ export class BridgeGame {
     }
     const result = addMember(
       this.design,
-      LEVEL,
+      this.level,
       this.tool,
       this.drag.start,
       this.pointerWorld(event),
@@ -296,7 +308,7 @@ export class BridgeGame {
       this.commit(result.design);
       this.audio.place();
       this.showMessage(
-        `${this.tool === "deck" ? "Road deck" : "Steel truss"} placed. Crossings only connect at visible nodes.`,
+        `${this.level.materials[this.tool].label} placed. Crossings only connect at visible nodes.`,
       );
     } else {
       this.showMessage(result.reason);
@@ -323,11 +335,9 @@ export class BridgeGame {
     this.pixi.canvas.style.cursor = tool === "erase" ? "not-allowed" : "crosshair";
     this.updateUi();
     this.showMessage(
-      tool === "deck"
-        ? "Road deck selected · maximum span 2 m"
-        : tool === "steel"
-          ? "Steel truss selected · maximum span 2.5 m"
-          : "Erase selected · click a member",
+      tool === "erase"
+        ? "Erase selected · click a member"
+        : `${this.level.materials[tool].label} selected · maximum span ${this.level.materials[tool].maxLength} m`,
     );
   }
 
@@ -376,7 +386,7 @@ export class BridgeGame {
     if (this.phase !== "BUILD" || this.design.members.length === 0) {
       return;
     }
-    this.commit(createEmptyDesign(LEVEL));
+    this.commit(createEmptyDesign(this.level));
     this.showMessage("Blueprint cleared. Undo restores it.");
   }
 
@@ -387,13 +397,13 @@ export class BridgeGame {
     if (this.phase !== "BUILD") {
       return;
     }
-    const validation = validateDesign(this.design, LEVEL);
+    const validation = validateDesign(this.design, this.level);
     if (!validation.valid) {
       this.showMessage(validation.issues[0] ?? "The bridge is not ready.");
       return;
     }
     this.phase = transitionPhase(this.phase, "START_TEST");
-    this.simulation = new BridgeSimulation(this.design, LEVEL);
+    this.simulation = new BridgeSimulation(this.design, this.level);
     this.snapshot = this.simulation.snapshot();
     this.accumulator = 0;
     this.lastFrame = performance.now();
@@ -430,7 +440,7 @@ export class BridgeGame {
   }
 
   private persist(): void {
-    saveState({ version: 1, design: this.design, muted: this.muted });
+    saveState(this.level, { version: 1, design: this.design, muted: this.muted });
   }
 
   private finishTest(): void {
@@ -440,6 +450,7 @@ export class BridgeGame {
     }
     this.phase = transitionPhase(this.phase, result.outcome === "success" ? "SUCCEED" : "FAIL");
     if (result.outcome === "success") {
+      this.onSuccess(result.cost);
       this.audio.success();
       this.elements.resultEyebrow.textContent = "Load test passed";
       this.elements.resultTitle.textContent = "The span holds.";
@@ -467,10 +478,10 @@ export class BridgeGame {
   }
 
   private updateUi(): void {
-    const validation = validateDesign(this.design, LEVEL);
+    const validation = validateDesign(this.design, this.level);
     const total = designCost(this.design);
-    const remaining = Math.max(0, LEVEL.budget - total);
-    const ratio = total / LEVEL.budget;
+    const remaining = Math.max(0, this.level.budget - total);
+    const ratio = total / this.level.budget;
     this.elements.cost.textContent = currency(total);
     this.elements.budgetRemaining.textContent = `${currency(remaining)} remaining`;
     this.elements.budgetFill.style.width = `${Math.min(100, ratio * 100)}%`;
@@ -521,7 +532,7 @@ export class BridgeGame {
     }
     this.messageTimer = window.setTimeout(() => {
       if (this.phase === "BUILD") {
-        const validation = validateDesign(this.design, LEVEL);
+        const validation = validateDesign(this.design, this.level);
         this.setMessage(
           validation.valid
             ? "Bridge ready for a load test."
@@ -538,7 +549,7 @@ export class BridgeGame {
   }
 
   private transform(): { scale: number; offsetX: number; offsetY: number } {
-    const bounds = LEVEL.viewBounds;
+    const bounds = this.level.viewBounds;
     const worldWidth = bounds.maxX - bounds.minX;
     const worldHeight = bounds.maxY - bounds.minY;
     const scale = Math.min(
@@ -662,27 +673,44 @@ export class BridgeGame {
     const graphics = this.background;
     graphics.clear();
     const { scale } = this.transform();
-    const topLeft = this.worldToScreen({ x: LEVEL.viewBounds.minX, y: LEVEL.viewBounds.maxY });
-    const bottomRight = this.worldToScreen({ x: LEVEL.viewBounds.maxX, y: LEVEL.viewBounds.minY });
+    const topLeft = this.worldToScreen({
+      x: this.level.viewBounds.minX,
+      y: this.level.viewBounds.maxY,
+    });
+    const bottomRight = this.worldToScreen({
+      x: this.level.viewBounds.maxX,
+      y: this.level.viewBounds.minY,
+    });
     graphics.rect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y);
     graphics.fill({ color: 0x07131f });
 
-    for (let x = LEVEL.buildBounds.minX; x <= LEVEL.buildBounds.maxX; x += LEVEL.gridSpacing) {
-      const start = this.worldToScreen({ x, y: LEVEL.buildBounds.minY });
-      const end = this.worldToScreen({ x, y: LEVEL.buildBounds.maxY });
+    for (
+      let x = this.level.buildBounds.minX;
+      x <= this.level.buildBounds.maxX;
+      x += this.level.gridSpacing
+    ) {
+      const start = this.worldToScreen({ x, y: this.level.buildBounds.minY });
+      const end = this.worldToScreen({ x, y: this.level.buildBounds.maxY });
       graphics.moveTo(start.x, start.y).lineTo(end.x, end.y);
     }
-    for (let y = LEVEL.buildBounds.minY; y <= LEVEL.buildBounds.maxY; y += LEVEL.gridSpacing) {
-      const start = this.worldToScreen({ x: LEVEL.buildBounds.minX, y });
-      const end = this.worldToScreen({ x: LEVEL.buildBounds.maxX, y });
+    for (
+      let y = this.level.buildBounds.minY;
+      y <= this.level.buildBounds.maxY;
+      y += this.level.gridSpacing
+    ) {
+      const start = this.worldToScreen({ x: this.level.buildBounds.minX, y });
+      const end = this.worldToScreen({ x: this.level.buildBounds.maxX, y });
       graphics.moveTo(start.x, start.y).lineTo(end.x, end.y);
     }
     graphics.stroke({ color: 0x315269, width: 1, alpha: 0.32 });
 
-    const horizonLeft = this.worldToScreen({ x: LEVEL.viewBounds.minX, y: 0 });
+    const horizonLeft = this.worldToScreen({ x: this.level.viewBounds.minX, y: 0 });
     const cliffLeft = this.worldToScreen({ x: 0, y: 0 });
-    const cliffBottomLeft = this.worldToScreen({ x: 0, y: LEVEL.viewBounds.minY });
-    const bottomLeft = this.worldToScreen({ x: LEVEL.viewBounds.minX, y: LEVEL.viewBounds.minY });
+    const cliffBottomLeft = this.worldToScreen({ x: 0, y: this.level.viewBounds.minY });
+    const bottomLeft = this.worldToScreen({
+      x: this.level.viewBounds.minX,
+      y: this.level.viewBounds.minY,
+    });
     graphics
       .moveTo(horizonLeft.x, horizonLeft.y)
       .lineTo(cliffLeft.x, cliffLeft.y)
@@ -690,12 +718,15 @@ export class BridgeGame {
       .lineTo(bottomLeft.x, bottomLeft.y)
       .closePath()
       .fill({ color: 0x122a39 });
-    const horizonRight = this.worldToScreen({ x: LEVEL.viewBounds.maxX, y: 0 });
-    const cliffRight = this.worldToScreen({ x: 8, y: 0 });
-    const cliffBottomRight = this.worldToScreen({ x: 8, y: LEVEL.viewBounds.minY });
+    const horizonRight = this.worldToScreen({ x: this.level.viewBounds.maxX, y: 0 });
+    const cliffRight = this.worldToScreen({ x: this.level.canyonWidth, y: 0 });
+    const cliffBottomRight = this.worldToScreen({
+      x: this.level.canyonWidth,
+      y: this.level.viewBounds.minY,
+    });
     const bottomRightCliff = this.worldToScreen({
-      x: LEVEL.viewBounds.maxX,
-      y: LEVEL.viewBounds.minY,
+      x: this.level.viewBounds.maxX,
+      y: this.level.viewBounds.minY,
     });
     graphics
       .moveTo(cliffRight.x, cliffRight.y)
@@ -705,25 +736,25 @@ export class BridgeGame {
       .closePath()
       .fill({ color: 0x122a39 });
 
-    const roadLeftStart = this.worldToScreen({ x: LEVEL.viewBounds.minX, y: 0.04 });
+    const roadLeftStart = this.worldToScreen({ x: this.level.viewBounds.minX, y: 0.04 });
     const roadLeftEnd = this.worldToScreen({ x: 0, y: 0.04 });
-    const roadRightStart = this.worldToScreen({ x: 8, y: 0.04 });
-    const roadRightEnd = this.worldToScreen({ x: LEVEL.viewBounds.maxX, y: 0.04 });
+    const roadRightStart = this.worldToScreen({ x: this.level.canyonWidth, y: 0.04 });
+    const roadRightEnd = this.worldToScreen({ x: this.level.viewBounds.maxX, y: 0.04 });
     graphics.moveTo(roadLeftStart.x, roadLeftStart.y).lineTo(roadLeftEnd.x, roadLeftEnd.y);
     graphics.moveTo(roadRightStart.x, roadRightStart.y).lineTo(roadRightEnd.x, roadRightEnd.y);
     graphics.stroke({ color: 0xf2b84b, width: Math.max(3, scale * 0.08), alpha: 0.85 });
 
-    for (let y = -0.8; y >= LEVEL.viewBounds.minY; y -= 0.65) {
-      const leftStart = this.worldToScreen({ x: LEVEL.viewBounds.minX, y });
+    for (let y = -0.8; y >= this.level.viewBounds.minY; y -= 0.65) {
+      const leftStart = this.worldToScreen({ x: this.level.viewBounds.minX, y });
       const leftEnd = this.worldToScreen({ x: 0, y: y - 0.65 });
-      const rightStart = this.worldToScreen({ x: 8, y: y - 0.65 });
-      const rightEnd = this.worldToScreen({ x: LEVEL.viewBounds.maxX, y });
+      const rightStart = this.worldToScreen({ x: this.level.canyonWidth, y: y - 0.65 });
+      const rightEnd = this.worldToScreen({ x: this.level.viewBounds.maxX, y });
       graphics.moveTo(leftStart.x, leftStart.y).lineTo(leftEnd.x, leftEnd.y);
       graphics.moveTo(rightStart.x, rightStart.y).lineTo(rightEnd.x, rightEnd.y);
     }
     graphics.stroke({ color: 0x29485a, width: 1, alpha: 0.45 });
 
-    for (const anchor of LEVEL.anchors) {
+    for (const anchor of this.level.anchors) {
       const point = this.worldToScreen(anchor);
       const radius = anchor.kind === "road" ? 9 : 7;
       graphics.circle(point.x, point.y, radius + 4).fill({ color: 0x07131f, alpha: 0.9 });
@@ -736,12 +767,12 @@ export class BridgeGame {
 
   private drawDesign(): void {
     const nodeById = new Map(this.design.nodes.map((node) => [node.id, node]));
-    for (const kind of ["steel", "deck"] as const) {
+    for (const kind of MEMBER_KINDS) {
       for (const member of this.design.members.filter((item) => item.kind === kind)) {
         const start = nodeById.get(member.startNodeId);
         const end = nodeById.get(member.endNodeId);
         if (start && end) {
-          this.drawMember(start, end, kind, LEVEL.materials[kind].color, 0, false);
+          this.drawMember(start, end, kind, this.level.materials[kind].color, 0, false);
         }
       }
     }
@@ -756,7 +787,7 @@ export class BridgeGame {
   }
 
   private drawRuntime(runtimeMembers: RuntimeSegment[], time: number): void {
-    for (const kind of ["steel", "deck"] as const) {
+    for (const kind of MEMBER_KINDS) {
       for (const member of runtimeMembers.filter((item) => item.kind === kind)) {
         const utilization = member.stress.smoothedUtilization;
         const color = member.stress.broken ? 0x6d4250 : stressColor(utilization);
@@ -785,10 +816,18 @@ export class BridgeGame {
     const start = this.worldToScreen(startWorld);
     const end = this.worldToScreen(endWorld);
     const { scale } = this.transform();
-    const baseWidth = kind === "deck" ? Math.max(7, scale * 0.16) : Math.max(4, scale * 0.09);
+    const widths: Record<MemberKind, number> = {
+      deck: 0.16,
+      steel: 0.09,
+      concrete: 0.2,
+      wood: 0.13,
+      aluminum: 0.075,
+      cable: 0.045,
+    };
+    const baseWidth = Math.max(kind === "cable" ? 2 : 4, scale * widths[kind]);
     const width = baseWidth * (utilization > 0.9 ? 1 + Math.sin(time * 14) * 0.11 : 1);
 
-    if (kind === "deck") {
+    if (kind === "deck" || kind === "concrete" || kind === "wood") {
       this.members.moveTo(start.x, start.y).lineTo(end.x, end.y);
       this.members.stroke({ color: 0x081018, width: width + 5, alpha: broken ? 0.45 : 0.85 });
     }
@@ -799,7 +838,7 @@ export class BridgeGame {
       this.members.moveTo(start.x, start.y).lineTo(end.x, end.y);
       this.members.stroke({ color, width, alpha: broken ? 0.35 : 1 });
     }
-    if (kind === "steel" && !broken) {
+    if ((kind === "steel" || kind === "aluminum") && !broken) {
       this.members.moveTo(start.x, start.y).lineTo(end.x, end.y);
       this.members.stroke({ color: 0xc7f4ef, width: 1, alpha: 0.34 });
     }
@@ -846,7 +885,13 @@ export class BridgeGame {
 
   private drawBuildPreview(time: number): void {
     if (this.drag && this.tool !== "erase") {
-      const preview = previewMember(this.design, LEVEL, this.tool, this.drag.start, this.drag.end);
+      const preview = previewMember(
+        this.design,
+        this.level,
+        this.tool,
+        this.drag.start,
+        this.drag.end,
+      );
       this.drawMember(
         preview.start,
         preview.end,
@@ -873,15 +918,15 @@ export class BridgeGame {
   }
 
   private drawParkedTruck(): void {
-    const { start, wheelOffsetX, wheelOffsetY, wheelRadius } = LEVEL.truck;
+    const { start, wheelOffsetX, wheelOffsetY, wheelRadius } = this.level.truck;
     this.drawTruckBody(start.x, start.y, 0);
     this.drawWheel(start.x - wheelOffsetX, start.y + wheelOffsetY, 0, wheelRadius);
     this.drawWheel(start.x + wheelOffsetX, start.y + wheelOffsetY, 0, wheelRadius);
   }
 
   private drawTruckBody(x: number, y: number, angle: number): void {
-    const width = LEVEL.truck.chassisHalfWidth;
-    const height = LEVEL.truck.chassisHalfHeight;
+    const width = this.level.truck.chassisHalfWidth;
+    const height = this.level.truck.chassisHalfHeight;
     const corners = [
       { x: -width, y: -height },
       { x: width, y: -height },
@@ -944,8 +989,8 @@ export class BridgeGame {
   }
 }
 
-export function getInitialMessage(design: BridgeDesign): string {
-  const validation = validateDesign(design, LEVEL);
+export function getInitialMessage(design: BridgeDesign, level: LevelDefinition): string {
+  const validation = validateDesign(design, level);
   return validation.valid
     ? "Bridge ready for a load test."
     : (validation.issues[0] ?? "Draw between grid points to build.");

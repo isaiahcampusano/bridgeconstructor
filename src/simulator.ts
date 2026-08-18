@@ -17,6 +17,7 @@ import type {
   FailureReason,
   LevelDefinition,
   MaterialDefinition,
+  MemberKind,
   MemberStress,
   StressMode,
   TestResult,
@@ -43,7 +44,7 @@ interface RuntimeMember {
 
 export interface RuntimeSegment {
   id: string;
-  kind: "deck" | "steel";
+  kind: MemberKind;
   start: Vec2Data;
   end: Vec2Data;
   stress: MemberStress;
@@ -147,7 +148,7 @@ export function evaluateDeckStress(
 }
 
 function memberEnds(runtime: RuntimeMember): [Vec2Data, Vec2Data] {
-  if (runtime.definition.kind === "deck" && runtime.body) {
+  if (runtime.body) {
     const half = runtime.definition.length / 2;
     const start = runtime.body.getWorldPoint(Vec2(-half, 0));
     const end = runtime.body.getWorldPoint(Vec2(half, 0));
@@ -195,6 +196,26 @@ export function updateStressState(
   };
 }
 
+export function updateAxialStressState(
+  state: MemberStress,
+  signedForce: number,
+  material: MaterialDefinition,
+  kind: MemberKind,
+  dt: number,
+): MemberStress {
+  const mode = signedForce < 0 ? "tension" : "compression";
+  const strength = mode === "tension" ? material.tensileStrength : material.compressiveStrength;
+  const utilization = normalizeLoad(Math.abs(signedForce), strength);
+  const next = updateStressState(state, utilization, mode, dt, {
+    axial: utilization,
+    shear: 0,
+    bending: 0,
+  });
+  return kind === "cable" && mode === "compression" && Math.abs(signedForce) > 0
+    ? { ...next, broken: true }
+    : next;
+}
+
 export class BridgeSimulation {
   readonly design: BridgeDesign;
   readonly world: World;
@@ -231,7 +252,7 @@ export class BridgeSimulation {
       filterCategoryBits: GROUND_CATEGORY,
       filterMaskBits: TRUCK_CATEGORY | BRIDGE_CATEGORY,
     });
-    const right = this.world.createBody({ position: Vec2(10.4, -0.45) });
+    const right = this.world.createBody({ position: Vec2(this.level.canyonWidth + 2.4, -0.45) });
     right.createFixture(Box(2.4, 0.45), {
       friction: 0.9,
       filterCategoryBits: GROUND_CATEGORY,
@@ -281,7 +302,9 @@ export class BridgeSimulation {
       const joints: Joint[] = [];
       let body: Body | undefined;
       let deckJoints: RuntimeMember["deckJoints"];
-      if (member.kind === "steel") {
+      const axialOnly =
+        member.kind === "steel" || member.kind === "aluminum" || member.kind === "cable";
+      if (axialOnly) {
         const joint = this.world.createJoint(
           new DistanceJoint(
             {
@@ -311,7 +334,7 @@ export class BridgeSimulation {
           allowSleep: false,
         });
         body.createFixture(Box(member.length / 2, 0.095), {
-          density: this.level.materials.deck.density,
+          density: this.level.materials[member.kind].density,
           friction: 0.95,
           filterCategoryBits: BRIDGE_CATEGORY,
           filterMaskBits: TRUCK_CATEGORY | GROUND_CATEGORY,
@@ -349,7 +372,7 @@ export class BridgeSimulation {
           memberId: member.id,
           utilization: 0,
           smoothedUtilization: 0,
-          mode: member.kind === "steel" ? "tension" : "bending",
+          mode: axialOnly ? "tension" : "bending",
           componentUtilization: { axial: 0, shear: 0, bending: 0 },
           overloadTime: 0,
           broken: false,
@@ -428,7 +451,11 @@ export class BridgeSimulation {
       bending: 0,
     };
 
-    if (runtime.definition.kind === "steel") {
+    const axialOnly =
+      runtime.definition.kind === "steel" ||
+      runtime.definition.kind === "aluminum" ||
+      runtime.definition.kind === "cable";
+    if (axialOnly) {
       const joint = runtime.joints[0];
       if (!joint) {
         return;
@@ -438,10 +465,13 @@ export class BridgeSimulation {
       const direction = Vec2(end.x - start.x, end.y - start.y);
       direction.normalize();
       const signedForce = force.x * direction.x + force.y * direction.y;
-      mode = signedForce < 0 ? "tension" : "compression";
-      const strength = mode === "tension" ? material.tensileStrength : material.compressiveStrength;
-      utilization = normalizeLoad(Math.abs(signedForce), strength);
-      componentUtilization = { axial: utilization, shear: 0, bending: 0 };
+      runtime.stress = updateAxialStressState(
+        runtime.stress,
+        signedForce,
+        material,
+        runtime.definition.kind,
+        dt,
+      );
     } else {
       if (!runtime.deckJoints) {
         return;
@@ -455,7 +485,15 @@ export class BridgeSimulation {
       componentUtilization = evaluation.componentUtilization;
     }
 
-    runtime.stress = updateStressState(runtime.stress, utilization, mode, dt, componentUtilization);
+    if (!axialOnly) {
+      runtime.stress = updateStressState(
+        runtime.stress,
+        utilization,
+        mode,
+        dt,
+        componentUtilization,
+      );
+    }
     if (runtime.stress.broken) {
       for (const joint of runtime.joints) {
         this.world.destroyJoint(joint);

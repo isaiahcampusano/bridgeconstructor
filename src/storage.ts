@@ -1,7 +1,17 @@
 import { createEmptyDesign, designCost, distance, pointKey } from "./model";
-import type { BridgeDesign, LevelDefinition, PersistedState } from "./types";
+import {
+  type BridgeDesign,
+  type LevelDefinition,
+  MEMBER_KINDS,
+  type PersistedState,
+} from "./types";
 
-export const STORAGE_KEY = "bridge-constructor:state:v1";
+const STORAGE_PREFIX = "bridge-constructor:state:v1";
+export const STORAGE_KEY = `${STORAGE_PREFIX}:blueprint-span-01`;
+
+export function storageKeyFor(levelId: string): string {
+  return `${STORAGE_PREFIX}:${levelId}`;
+}
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
@@ -28,7 +38,7 @@ export function isBridgeDesign(value: unknown): value is BridgeDesign {
       (member) =>
         member &&
         typeof member.id === "string" &&
-        (member.kind === "deck" || member.kind === "steel") &&
+        MEMBER_KINDS.some((kind) => member.kind === kind) &&
         typeof member.startNodeId === "string" &&
         typeof member.endNodeId === "string" &&
         isFiniteNumber(member.length) &&
@@ -91,6 +101,9 @@ export function isCompatibleDesign(design: BridgeDesign, level: LevelDefinition)
     }
     const measuredLength = distance(start, end);
     const material = level.materials[member.kind];
+    if (!material) {
+      return false;
+    }
     const expectedCost = Math.round(measuredLength * material.costPerMeter);
     if (
       Math.abs(member.length - measuredLength) > 0.001 ||
@@ -127,15 +140,15 @@ export function parsePersistedState(raw: string | null, level: LevelDefinition):
 
 export function loadState(level: LevelDefinition): PersistedState {
   try {
-    return parsePersistedState(localStorage.getItem(STORAGE_KEY), level);
+    return parsePersistedState(localStorage.getItem(storageKeyFor(level.id)), level);
   } catch {
     return { version: 1, design: createEmptyDesign(level), muted: false };
   }
 }
 
-export function saveState(state: PersistedState): void {
+export function saveState(level: LevelDefinition, state: PersistedState): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    localStorage.setItem(storageKeyFor(level.id), JSON.stringify(state));
   } catch {
     // The game remains playable if storage is blocked or full.
   }

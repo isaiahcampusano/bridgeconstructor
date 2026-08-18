@@ -6,6 +6,7 @@ import {
   evaluateDeckStress,
   PHYSICS_STEP,
   type RuntimeSegment,
+  updateAxialStressState,
   updateStressState,
 } from "./simulator";
 import type { BridgeDesign, MemberStress, TestResult, Vec2Data } from "./types";
@@ -165,6 +166,45 @@ describe("deterministic bridge physics", () => {
     }
     expect(state.broken).toBe(true);
     expect(updateStressState(initial, 1.6, "compression", 0.01).broken).toBe(true);
+  });
+
+  it("snaps a cable on its first compressed physics step", () => {
+    const initial: MemberStress = {
+      memberId: "cable-1",
+      utilization: 0,
+      smoothedUtilization: 0,
+      mode: "tension",
+      componentUtilization: { axial: 0, shear: 0, bending: 0 },
+      overloadTime: 0,
+      broken: false,
+    };
+    const compressed = updateAxialStressState(
+      initial,
+      0.001,
+      LEVEL.materials.cable,
+      "cable",
+      PHYSICS_STEP,
+    );
+    expect(compressed.mode).toBe("compression");
+    expect(compressed.broken).toBe(true);
+    expect(compressed.overloadTime).toBe(PHYSICS_STEP);
+  });
+
+  it("keeps non-cable axial materials intact under a tiny compressive load", () => {
+    const initial: MemberStress = {
+      memberId: "axial-1",
+      utilization: 0,
+      smoothedUtilization: 0,
+      mode: "tension",
+      componentUtilization: { axial: 0, shear: 0, bending: 0 },
+      overloadTime: 0,
+      broken: false,
+    };
+    for (const kind of ["steel", "aluminum"] as const) {
+      expect(
+        updateAxialStressState(initial, 0.001, LEVEL.materials[kind], kind, PHYSICS_STEP).broken,
+      ).toBe(false);
+    }
   });
 
   it("carries the truck across the documented reference truss", () => {
