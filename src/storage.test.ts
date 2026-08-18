@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createReferenceDesign, LEVEL } from "./level";
+import { LEVELS } from "./levels";
 import { parsePersistedState } from "./storage";
 
 describe("local persistence", () => {
@@ -47,5 +48,34 @@ describe("local persistence", () => {
     };
     expect(parsePersistedState(JSON.stringify(dangling), LEVEL).design.members).toHaveLength(0);
     expect(parsePersistedState(JSON.stringify(tampered), LEVEL).design.members).toHaveLength(0);
+  });
+
+  it("accepts newly added member kinds and rejects a design from another level", () => {
+    const reference = createReferenceDesign();
+    const first = reference.members[0];
+    if (!first) throw new Error("Reference design has no members.");
+    const withWood = {
+      version: 1 as const,
+      muted: false,
+      design: {
+        ...reference,
+        members: [
+          {
+            ...first,
+            kind: "wood" as const,
+            cost: Math.round(first.length * LEVEL.materials.wood.costPerMeter),
+          },
+          ...reference.members.slice(1),
+        ],
+      },
+    };
+    expect(parsePersistedState(JSON.stringify(withWood), LEVEL).design.members[0]?.kind).toBe(
+      "wood",
+    );
+    const secondLevel = LEVELS[1];
+    if (!secondLevel) throw new Error("Second level is missing.");
+    expect(parsePersistedState(JSON.stringify(withWood), secondLevel).design.members).toHaveLength(
+      0,
+    );
   });
 });

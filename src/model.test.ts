@@ -10,7 +10,7 @@ import {
   snapPoint,
   validateDesign,
 } from "./model";
-import type { Vec2Data } from "./types";
+import { MEMBER_KINDS, type Vec2Data } from "./types";
 
 describe("bridge design model", () => {
   it("snaps coordinates to the level grid", () => {
@@ -47,6 +47,15 @@ describe("bridge design model", () => {
     expect(overBudget.ok).toBe(false);
     expect(overBudget.reason).toContain("exceed the budget");
     expect(designCost(overBudget.design)).toBe(LEVEL.budget);
+  });
+
+  it("previews every available material from the level definition", () => {
+    const design = createEmptyDesign(LEVEL);
+    for (const kind of MEMBER_KINDS) {
+      const preview = previewMember(design, LEVEL, kind, { x: 0, y: -3 }, { x: 1, y: -3 });
+      expect(preview.valid, kind).toBe(true);
+      expect(preview.cost).toBe(LEVEL.materials[kind].costPerMeter);
+    }
   });
 
   it("requires a connected deck path between road anchors", () => {

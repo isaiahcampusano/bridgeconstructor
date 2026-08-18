@@ -1,4 +1,5 @@
-export type MemberKind = "deck" | "steel";
+export const MEMBER_KINDS = ["deck", "steel", "concrete", "wood", "aluminum", "cable"] as const;
+export type MemberKind = (typeof MEMBER_KINDS)[number];
 export type GamePhase = "BUILD" | "TESTING" | "SUCCESS" | "FAILURE";
 export type FailureReason = "fell" | "stalled" | "timeout" | "stopped";
 export type StressMode = "tension" | "compression" | "shear" | "bending";

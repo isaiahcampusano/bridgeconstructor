@@ -206,6 +206,12 @@ h1 {
   justify-self: end;
 }
 
+.topbar-actions {
+  display: flex;
+  justify-self: end;
+  gap: 8px;
+}
+
 .control-rail {
   display: grid;
   grid-template-columns: minmax(0, 1.7fr) auto minmax(220px, 0.7fr) auto;
@@ -220,6 +226,9 @@ h1 {
 
 .tool-group {
   gap: 7px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 
 .tool-button,
@@ -245,11 +254,100 @@ h1 {
 .tool-button {
   display: flex;
   align-items: center;
-  min-width: 158px;
+  min-width: 140px;
   padding: 8px 11px;
   gap: 10px;
   border-radius: 8px;
   text-align: left;
+}
+
+.tool-swatch {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 8px;
+  border: 2px solid #061018;
+  border-radius: 999px;
+  background: var(--material-color);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--material-color), white 30%);
+}
+
+.level-select-shell {
+  width: min(960px, calc(100% - 48px));
+  margin: 0 auto;
+  padding-top: clamp(80px, 15vh, 150px);
+}
+
+.level-select-shell h1 {
+  font-size: clamp(40px, 6vw, 68px);
+}
+
+.level-select-intro {
+  max-width: 620px;
+  margin: 18px 0 36px;
+  color: var(--muted);
+  font-size: 18px;
+}
+
+.level-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  margin-bottom: 28px;
+}
+
+.level-card {
+  display: flex;
+  min-height: 190px;
+  padding: 24px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 11px;
+  border: 1px solid #315365;
+  border-radius: 14px;
+  background: linear-gradient(145deg, #102633, #091721);
+  text-align: left;
+  cursor: pointer;
+}
+
+.level-card:hover:not(:disabled) {
+  border-color: var(--cyan);
+  transform: translateY(-2px);
+}
+
+.level-card:disabled {
+  opacity: 0.46;
+  cursor: not-allowed;
+}
+
+.level-card strong {
+  font-size: 22px;
+}
+
+.level-card span:not(.level-number),
+.level-card small {
+  color: var(--muted);
+}
+
+.level-number {
+  color: var(--amber);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.unlock-toast {
+  position: fixed;
+  z-index: 20;
+  right: 24px;
+  bottom: 24px;
+  padding: 14px 18px;
+  border: 1px solid var(--mint);
+  border-radius: 10px;
+  background: #102c2b;
+  color: #a8f2e3;
+  box-shadow: 0 12px 40px #0008;
+  font-weight: 800;
 }
 
 .tool-button.is-selected {
